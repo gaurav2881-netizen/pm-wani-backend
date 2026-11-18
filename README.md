@@ -18,10 +18,8 @@ Phone without app ──> CoovaChilli redirect ──> /chilli (portal pages, sa
    sudo PDOA_PHONES=<your 10-digit admin mobile> bash deploy/install.sh
    ```
 3. Open `http://<EC2-IP>/docs` — interactive API documentation (try every endpoint from the browser).
-4. On the AP (OpenWrt), make CoovaChilli send its NAS id as Called-Station-Id (used to link sessions to hotspots):
-   ```sh
-   uci set chilli.@chilli[0].radiuscalled='pmwani-ap1'; uci commit chilli; /etc/init.d/chilli restart
-   ```
+4. Each AP's `radiusnasid` (in `/etc/config/chilli`) must equal its `nas_id` in the backend. The POC AP
+   already uses `pmwani-ap1`. FreeRADIUS copies it into Called-Station-Id, which links sessions to hotspots.
 
 What the installer does: installs PostgreSQL, creates database `pmwani`, imports the FreeRADIUS schema,
 switches the FreeRADIUS `sql` module from MariaDB to PostgreSQL (previous config saved as
@@ -40,6 +38,18 @@ Logs: `sudo journalctl -u pmwani-api -f`.
 | `RAZORPAY_WEBHOOK_SECRET` | For `/api/v1/payments/razorpay/webhook` (events `payment.captured`, `order.paid`). Webhooks need HTTPS (domain). |
 | `CHILLI_UAMSECRET` | Must equal `uamsecret` in `/etc/config/chilli` on every AP |
 | `PUBLIC_BASE_URL` | Change to `https://api.yourdomain` once the domain + HTTPS is ready |
+
+## MikroTik Hotspot sites
+
+MikroTik routers use their built-in Hotspot with RADIUS (no CoovaChilli):
+- The router's `login.html` (published by the installer at `/files/mikrotik/login.html`) redirects users to
+  `<PUBLIC_BASE_URL>/mikrotik` with the hotspot details; after OTP the portal sends the browser back to the
+  router's `/login` with an HTTP-CHAP password.
+- RADIUS replies include `Mikrotik-Rate-Limit` (upload/download) and `Mikrotik-Total-Limit(-Gigawords)` besides
+  the CoovaChilli attributes; each router ignores the other vendor's attributes.
+- The router's **system identity** is sent as NAS-Identifier and must equal the hotspot's `nas_id`.
+- In-app login: `POST /api/v1/wifi/login` also accepts `link_login, chap_id, chap_challenge, mac, nasid, dst`
+  (from the `/mikrotik?...` redirect URL).
 
 ## API (base: `/api/v1`, auth: `Authorization: Bearer <token>`)
 

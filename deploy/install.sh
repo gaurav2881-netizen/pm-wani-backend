@@ -66,6 +66,7 @@ if [[ $("${PSQL[@]}" -tAc "SELECT to_regclass('public.radacct') IS NOT NULL") !=
   "${PSQL[@]}" -f "$RAD_DIR/mods-config/sql/main/postgresql/schema.sql"
   echo "    FreeRADIUS schema imported"
 fi
+"${PSQL[@]}" -c "ALTER TABLE radpostauth ADD COLUMN IF NOT EXISTS nasidentifier text"
 unset PGPASSWORD
 
 echo "==> [3/7] FreeRADIUS sql module -> PostgreSQL"
@@ -88,10 +89,26 @@ for pat in 'dialect = "postgresql"' 'driver = "rlm_sql_\$\{dialect\}"' "password
 done
 chown freerad:freerad "$SQLMOD"; chmod 640 "$SQLMOD"
 ln -sf ../mods-available/sql "$RAD_DIR/mods-enabled/sql"
+# Log AP name + AP MAC + phone MAC for every login attempt (radpostauth)
+QUERIES="$RAD_DIR/mods-config/sql/main/postgresql/queries.conf"
+if ! grep -q "nasidentifier, calledstationid, callingstationid" "$QUERIES"; then
+  cp "$QUERIES" "${QUERIES}.before-macs"
+  sed -i \
+   -e 's|(username, pass, reply, authdate ${..class.column_name})|(username, pass, reply, nasidentifier, calledstationid, callingstationid, authdate ${..class.column_name})|' \
+   -e "s|'%{reply:Packet-Type}', \\\\|'%{reply:Packet-Type}', '%{NAS-Identifier}', '%{Called-Station-Id}', '%{Calling-Station-Id}', \\\\|" "$QUERIES"
+fi
+# Store the AP name (CoovaChilli radiusnasid -> NAS-Identifier) as Called-Station-Id in accounting,
+# so every session is linked to its hotspot
+SITE="$RAD_DIR/sites-available/default"
+if ! grep -q "Called-Station-Id := &NAS-Identifier" "$SITE"; then
+  cp "$SITE" "${SITE}.before-pmwani"
+  sed -i '0,/^preacct {/s//preacct {\n\t# PM-WANI: store the AP name (radiusnasid) as Called-Station-Id so sessions map to hotspots\n\tif (\&NAS-Identifier) {\n\t\tupdate request {\n\t\t\t\&Called-Station-Id := \&NAS-Identifier\n\t\t}\n\t}/' "$SITE"
+fi
 if ! freeradius -XC > /tmp/freeradius-check.log 2>&1; then
   echo "!! FreeRADIUS config check failed, restoring previous config. Last lines:"
   tail -n 25 /tmp/freeradius-check.log
   cp "${SQLMOD}.before-postgres" "$SQLMOD"
+  [[ -f "${SITE}.before-pmwani" ]] && cp "${SITE}.before-pmwani" "$SITE"
   exit 1
 fi
 systemctl restart freeradius
@@ -154,7 +171,10 @@ WantedBy=multi-user.target
 EOF
 systemctl disable --now pmwani-portal 2>/dev/null || true      # old Flask POC portal
 
-mkdir -p /var/www/pmwani-files
+mkdir -p /var/www/pmwani-files/mikrotik
+# MikroTik Hotspot login page (routers download it with /tool fetch)
+sed "s|__PORTAL_BASE__|${PUBLIC_BASE_URL}|g" "$SRC_DIR/deploy/mikrotik/login.html" > /var/www/pmwani-files/mikrotik/login.html
+chmod 644 /var/www/pmwani-files/mikrotik/login.html
 cat > /etc/nginx/sites-available/pmwani-api <<'EOF'
 server {
     listen 80 default_server;
@@ -198,7 +218,7 @@ cat <<EOF
  Settings file:               ${ENV_FILE}
  Logs:                        sudo journalctl -u pmwani-api -f
 
- On the AP, make CoovaChilli report its NAS id as Called-Station-Id:
-   uci set chilli.@chilli[0].radiuscalled='pmwani-ap1'; uci commit chilli; /etc/init.d/chilli restart
+ Each AP's radiusnasid in /etc/config/chilli must match its nas_id in the backend
+ (the POC AP is "pmwani-ap1", which the AP setup script already uses).
 =====================================================================
 EOF

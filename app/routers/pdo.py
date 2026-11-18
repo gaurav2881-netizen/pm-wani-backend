@@ -20,7 +20,7 @@ def chilli_config(ap: AccessPoint) -> dict:
     """Values to put in /etc/config/chilli on this AP."""
     s = get_settings()
     host = re.sub(r"^https?://", "", s.public_base_url).split("/")[0]
-    return {"radiusnasid": ap.nas_id, "radiuscalled": ap.nas_id, "radiusserver1": host,
+    return {"radiusnasid": ap.nas_id, "radiusserver1": host,
             "uamserver": f"{s.public_base_url}/chilli", "uamallowed": host, "ssid": ap.ssid}
 
 

@@ -10,7 +10,8 @@ from .. import billing
 from ..config import get_settings
 from ..db import get_db
 from ..models import AccessPoint, Order, Plan, Subscription, User, WalletTransaction, WifiLogin, utcnow
-from ..radius import authorize_user, chilli_logon_url, nas_status, valid_chilli_params
+from ..radius import (authorize_user, chilli_logon_url, mikrotik_logon_url, nas_status, valid_chilli_params,
+                      valid_mikrotik_params)
 from ..schemas import (BuyPlanIn, HotspotOut, OrderOut, PaymentVerifyIn, PlanOut, SubscriptionOut, TopupIn,
                        WalletOut, WifiLoginIn, WifiLoginOut, WifiStatusOut)
 from ..security import current_user
@@ -130,9 +131,14 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: str = Header(
 @router.post("/wifi/login", response_model=WifiLoginOut, tags=["wifi"])
 def wifi_login(body: WifiLoginIn, request: Request, user: User = Depends(current_user),
                db: Session = Depends(get_db)):
-    """In-app hotspot login. The app reads uamip/uamport/challenge/mac from CoovaChilli's redirect,
-    calls this, then opens `logon_url` over the Wi-Fi network."""
-    if not valid_chilli_params(body.uamip, body.uamport, body.challenge, body.mac):
+    """In-app hotspot login. The app reads the parameters from the hotspot's redirect (CoovaChilli or
+    MikroTik), calls this, then opens `logon_url` over the Wi-Fi network."""
+    mikrotik = bool(body.link_login)
+    if mikrotik:
+        ok = valid_mikrotik_params(body.link_login, body.chap_id or "", body.chap_challenge or "", body.mac)
+    else:
+        ok = valid_chilli_params(body.uamip or "", body.uamport or "", body.challenge or "", body.mac)
+    if not ok:
         raise HTTPException(422, "invalid_hotspot_parameters")
     sub, remaining = billing.current_subscription(db, user)
     if not sub:
@@ -141,10 +147,16 @@ def wifi_login(body: WifiLoginIn, request: Request, user: User = Depends(current
     db.add(WifiLogin(user_id=user.id, subscription_id=sub.id, nas_id=body.nasid, client_mac=body.mac,
                      channel="app", user_agent=request.headers.get("user-agent", "")[:255]))
     db.commit()
-    userurl = body.userurl if (body.userurl or "").startswith(("http://", "https://")) else None
-    return WifiLoginOut(logon_url=chilli_logon_url(body.uamip, body.uamport, body.challenge, user.phone,
-                                                   password, userurl),
-                        session_timeout=timeout, remaining_bytes=remaining,
+
+    def web(u):
+        return u if (u or "").startswith(("http://", "https://")) else None
+
+    if mikrotik:
+        url = mikrotik_logon_url(body.link_login, body.chap_id, body.chap_challenge, user.phone, password,
+                                 web(body.dst))
+    else:
+        url = chilli_logon_url(body.uamip, body.uamport, body.challenge, user.phone, password, web(body.userurl))
+    return WifiLoginOut(logon_url=url, session_timeout=timeout, remaining_bytes=remaining,
                         plan=PlanOut.model_validate(sub.plan))
 
 

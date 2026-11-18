@@ -13,6 +13,7 @@ from .models import Subscription, User, utcnow
 
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}([-:]?[0-9A-Fa-f]{2}){5}$")
 HEX32_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
+HEX2_RE = re.compile(r"^[0-9A-Fa-f]{2}$")
 MAX_OCTETS = 2**32 - 1   # ChilliSpot-Max-Total-Octets is a 32-bit attribute
 
 
@@ -46,6 +47,13 @@ def authorize_user(db: Session, user: User, sub: Subscription, remaining_bytes: 
         reply.append(("WISPr-Bandwidth-Max-Down", str(plan.speed_down_kbps * 1000)))
     if plan.speed_up_kbps:
         reply.append(("WISPr-Bandwidth-Max-Up", str(plan.speed_up_kbps * 1000)))
+    # MikroTik Hotspot equivalents (each NAS ignores the other vendor's attributes)
+    if remaining_bytes is not None:
+        reply.append(("Mikrotik-Total-Limit", str(remaining_bytes % 2**32)))
+        reply.append(("Mikrotik-Total-Limit-Gigawords", str(remaining_bytes >> 32)))
+    if plan.speed_down_kbps or plan.speed_up_kbps:
+        # rx/tx from the router's view of the client = upload/download; 0 = unlimited
+        reply.append(("Mikrotik-Rate-Limit", f"{plan.speed_up_kbps or 0}k/{plan.speed_down_kbps or 0}k"))
 
     u = user.phone
     db.execute(text("DELETE FROM radcheck WHERE username = :u"), {"u": u})
@@ -93,3 +101,25 @@ def nas_status(db: Session) -> dict[str, dict]:
         online = r["last_seen"] is not None and (utcnow() - r["last_seen"]).total_seconds() < s.hotspot_online_minutes * 60
         out[r["nas"]] = {"last_seen": r["last_seen"], "active_sessions": int(r["active"]), "online": online}
     return out
+
+
+# --------------------------------------------------------------- MikroTik
+def valid_mikrotik_params(link_login: str, chap_id: str, chap_challenge: str, mac: str) -> bool:
+    """link_login must be http://<private IPv4>[:port]/login (the hotspot's own login URL)."""
+    from urllib.parse import urlparse
+    try:
+        u = urlparse(link_login or "")
+    except ValueError:
+        return False
+    return bool(u.scheme == "http" and u.hostname and private_ipv4(u.hostname) and u.path.rstrip("/") == "/login"
+                and HEX2_RE.match(chap_id or "") and HEX32_RE.match(chap_challenge or "") and MAC_RE.match(mac or ""))
+
+
+def mikrotik_logon_url(link_login: str, chap_id: str, chap_challenge: str, username: str, password: str,
+                       dst: str | None = None) -> str:
+    """MikroTik Hotspot HTTP-CHAP login: password = MD5(chap-id + password + chap-challenge)."""
+    digest = hashlib.md5(bytes.fromhex(chap_id) + password.encode() + bytes.fromhex(chap_challenge)).hexdigest()
+    query = {"username": username, "password": digest}
+    if dst:
+        query["dst"] = dst
+    return f"{link_login.split('?')[0]}?{urlencode(query)}"

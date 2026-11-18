@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="pragma" content="no-cache">
+<meta http-equiv="expires" content="-1">
+<title>PM-WANI Wi-Fi</title>
+</head>
+<body style="font-family:sans-serif;text-align:center;padding-top:40px">
+<p>Opening the Wi-Fi login page&hellip;</p>
+$(if chap-id)
+<script>
+/* PM-WANI: send the user to the central login portal with this hotspot's details.
+   chap-id / chap-challenge arrive as octal-escaped strings; convert them to hex. */
+function toHex(s) {
+  var h = '';
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i).toString(16);
+    h += (c.length < 2 ? '0' : '') + c;
+  }
+  return h;
+}
+var p = {
+  link_login: '$(link-login-only)',
+  chap_id: toHex('$(chap-id)'),
+  chap_challenge: toHex('$(chap-challenge)'),
+  mac: '$(mac)',
+  ip: '$(ip)',
+  nasid: '$(identity)',
+  dst: decodeURIComponent('$(link-orig-esc)'),
+  error: '$(error)'
+};
+var q = [];
+for (var k in p) { q.push(k + '=' + encodeURIComponent(p[k])); }
+location.replace('__PORTAL_BASE__/mikrotik?' + q.join('&'));
+</script>
+<noscript><p>Please enable JavaScript to log in.</p></noscript>
+$(else)
+<p>Hotspot misconfigured: enable HTTP CHAP login (login-by=http-chap).</p>
+$(endif)
+</body>
+</html>

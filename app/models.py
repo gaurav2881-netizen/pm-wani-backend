@@ -46,7 +46,7 @@ class OtpRequest(Base):
 
 
 class AccessPoint(Base):
-    """A hotspot AP. nas_id must equal CoovaChilli's radiusnasid / radiuscalled on that AP."""
+    """A hotspot AP. nas_id must equal CoovaChilli's radiusnasid on that AP."""
     __tablename__ = "app_access_points"
 
     id: Mapped[int] = mapped_column(primary_key=True)

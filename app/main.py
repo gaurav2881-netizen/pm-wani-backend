@@ -34,7 +34,7 @@ def init_db() -> None:
         if not db.scalar(select(Plan.id).limit(1)):
             db.add_all(Plan(**p) for p in DEFAULT_PLANS)
         if not db.scalar(select(AccessPoint.id).limit(1)):
-            # the POC access point; radiusnasid/radiuscalled on the AP must be "pmwani-ap1"
+            # the POC access point; radiusnasid on the AP must be "pmwani-ap1"
             db.add(AccessPoint(name="POC Hotspot", nas_id="pmwani-ap1", ssid="PMWANI-Free", status="active"))
         db.commit()
 

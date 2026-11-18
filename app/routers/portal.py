@@ -1,4 +1,5 @@
-"""Captive-portal web pages for users without the app (CoovaChilli uamserver = <base>/chilli)."""
+"""Captive-portal web pages for users without the app.
+CoovaChilli: uamserver = <base>/chilli.   MikroTik Hotspot: login.html redirects to <base>/mikrotik."""
 import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -12,7 +13,8 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import Plan, WifiLogin
 from ..otp import OtpError, issue_otp, normalize_phone, verify_otp
-from ..radius import authorize_user, chilli_logon_url, private_ipv4, valid_chilli_params
+from ..radius import (authorize_user, chilli_logon_url, mikrotik_logon_url, private_ipv4, valid_chilli_params,
+                      valid_mikrotik_params)
 
 router = APIRouter(include_in_schema=False)
 log = logging.getLogger("portal")
@@ -69,6 +71,11 @@ def render(page: str, **ctx) -> HTMLResponse:
 
 
 def gateway(src) -> dict | None:
+    """Validated hotspot parameters from a CoovaChilli or MikroTik redirect (or our hidden form fields)."""
+    if src.get("link_login"):  # MikroTik Hotspot
+        gw = {k: (src.get(k) or "") for k in ("link_login", "chap_id", "chap_challenge", "mac", "ip", "nasid")}
+        gw["dst"] = (src.get("dst") or "")[:512]
+        return gw if valid_mikrotik_params(gw["link_login"], gw["chap_id"], gw["chap_challenge"], gw["mac"]) else None
     gw = {k: (src.get(k) or "") for k in ("uamip", "uamport", "challenge", "mac", "nasid")}
     gw["userurl"] = (src.get("userurl") or "")[:512]
     return gw if valid_chilli_params(gw["uamip"], gw["uamport"], gw["challenge"], gw["mac"]) else None
@@ -76,7 +83,13 @@ def gateway(src) -> dict | None:
 
 def again_url(gw: dict) -> str:
     from urllib.parse import urlencode
+    if "link_login" in gw:
+        return "/mikrotik?" + urlencode(gw)
     return "/chilli?" + urlencode({"res": "notyet", **gw})
+
+
+def _web_url(url: str) -> str | None:
+    return url if url.startswith(("http://", "https://")) else None
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -102,6 +115,20 @@ def chilli(request: Request):
         reply = args.get("reply", "")
         return render("phone", gw=gw, error="Login failed. Please try again." + (f" ({reply})" if reply else ""))
     return render("phone", gw=gw)
+
+
+@router.get("/mikrotik", response_class=HTMLResponse)
+def mikrotik(request: Request):
+    """MikroTik Hotspot entry point. The router's login.html redirects here with
+    link_login, chap_id, chap_challenge (hex), mac, ip, nasid (router identity), dst, error."""
+    args = request.query_params
+    log.info("mikrotik mac=%s nasid=%s ip=%s error=%s", args.get("mac"), args.get("nasid"), args.get("ip"),
+             args.get("error"))
+    gw = gateway(args)
+    if not gw:
+        return render("no_params")
+    error = args.get("error", "")
+    return render("phone", gw=gw, error=f"Login failed. Please try again. ({error})" if error else None)
 
 
 @router.post("/portal/otp", response_class=HTMLResponse)
@@ -151,6 +178,10 @@ async def portal_verify(request: Request, request_id: str = Form(""), otp: str =
     db.add(WifiLogin(user_id=user.id, subscription_id=sub.id, nas_id=gw["nasid"] or None, client_mac=gw["mac"],
                      channel="portal", user_agent=request.headers.get("user-agent", "")[:255]))
     db.commit()
-    url = chilli_logon_url(gw["uamip"], gw["uamport"], gw["challenge"], user.phone, password,
-                           gw["userurl"] if gw["userurl"].startswith(("http://", "https://")) else None)
+    if "link_login" in gw:
+        url = mikrotik_logon_url(gw["link_login"], gw["chap_id"], gw["chap_challenge"], user.phone, password,
+                                 _web_url(gw["dst"]))
+    else:
+        url = chilli_logon_url(gw["uamip"], gw["uamport"], gw["challenge"], user.phone, password,
+                               _web_url(gw["userurl"]))
     return RedirectResponse(url, status_code=303)

@@ -147,13 +147,21 @@ class HotspotOut(BaseModel):
 
 
 class WifiLoginIn(BaseModel):
-    """Values come from CoovaChilli's redirect URL (http://<portal>/chilli?res=notyet&uamip=...)."""
-    uamip: str = Field(examples=["10.1.0.1"])
-    uamport: str = Field(examples=["3990"])
-    challenge: str
+    """Values come from the hotspot's redirect URL.
+    CoovaChilli: http://<portal>/chilli?res=notyet&uamip=...&uamport=...&challenge=...&mac=...
+    MikroTik:    http://<portal>/mikrotik?link_login=...&chap_id=...&chap_challenge=...&mac=...&nasid=..."""
     mac: str
     nasid: str | None = None
+    # CoovaChilli
+    uamip: str | None = Field(None, examples=["10.1.0.1"])
+    uamport: str | None = Field(None, examples=["3990"])
+    challenge: str | None = None
     userurl: str | None = None
+    # MikroTik Hotspot
+    link_login: str | None = Field(None, examples=["http://10.5.50.1/login"])
+    chap_id: str | None = None
+    chap_challenge: str | None = None
+    dst: str | None = None
 
 
 class WifiLoginOut(BaseModel):
